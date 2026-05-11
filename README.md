@@ -1,16 +1,13 @@
 # aibridge
 
-Bridge antara AI provider web (Monica, Perplexity) dan tool coding yang expect
-OpenAI/Anthropic-compatible API — tanpa resmi API key, pake session kamu sendiri
-lewat browser anti-detect (Camoufox).
+Bridge web-only AI providers (Monica, Perplexity) to an OpenAI / Anthropic
+compatible HTTP API — no official API keys required, just your own browser
+session through an anti-detect browser (Camoufox).
 
-**Status:** early-stage, text-only.
-
-## What it does
-
-Tool kamu (Trae, Cline, Continue, Claude Code, atau apa pun yang ngomong
-OpenAI/Anthropic API format) → aibridge → Camoufox browser yang udah login →
-provider.
+Works with any tool that speaks the OpenAI API: [Trae](https://trae.ai),
+[Cline](https://github.com/cline/cline), [Continue.dev](https://continue.dev),
+[Claude Code](https://claude.ai/code), [9router](https://github.com/9router/9router),
+or your own scripts.
 
 ```
 ┌──────────┐   OpenAI API    ┌──────────┐   browser fetch   ┌─────────────┐
@@ -20,105 +17,211 @@ provider.
                              Camoufox (logged-in)
 ```
 
-Provider yang sudah ter-support:
+## Features
 
-- **monica** — Claude Sonnet 4.6, GPT-5/5.5, Gemini 3.1 Pro Thinking, dkk
-- **perplexity** — answer + sources (WIP)
+- **Cross-platform**: macOS, Linux, Windows
+- **Anti-detect browser** via [Camoufox](https://camoufox.com) (Firefox-based)
+- **Daemon mode** with `start` / `stop` / `status` / `logs` commands
+- **OS autostart** integration (launchd on macOS, systemd user units on Linux)
+- **Background process** with no dock icon on macOS
+- **9router auto-integration**: one command registers the provider and its
+  credentials in your local 9router instance
+- **Multiple providers** behind a single OpenAI-compatible endpoint
+
+### Supported providers
+
+| Provider   | Models                                                                                            |
+| ---------- | ------------------------------------------------------------------------------------------------- |
+| monica     | Claude Sonnet 4.5/4.6, Claude Opus 4.1, GPT-5, GPT-5.5, GPT-4o, Gemini 2.5 Pro, Gemini 3.1 Pro    |
+| perplexity | Sonar 2, GPT-5/5.1/5.2/5.4/5.5 (± Thinking), Claude Sonnet/Opus 4.5-4.7 (± Thinking), Gemini 3/3.1 (± Thinking), Kimi K2.5/2.6 (± Thinking), Grok 4/4.1 (± Thinking), Nemotron 3 Super |
+
+A Perplexity Pro subscription is required to use the full model list.
 
 ## Install
 
-### macOS / Linux
+### From PyPI (recommended, once published)
 
 ```bash
-git clone <this-repo> aibridge && cd aibridge
-./install.sh
+pip install aibridge
+aibridge setup
 ```
 
-### Windows (PowerShell)
-
-```powershell
-git clone <this-repo> aibridge; cd aibridge
-.\install.ps1
-```
-
-Script ini:
-
-1. Bikin venv `.venv/` (butuh Python >= 3.10)
-2. Install `camoufox[geoip]`, `playwright`, dan deps lain
-3. Fetch Camoufox browser binary (~200MB)
-4. Siapin config dir di `~/.aibridge/`
-
-## Usage
-
-### 1. Login (sekali aja per provider)
+### From GitHub
 
 ```bash
+pip install git+https://github.com/yudhaharsanto/aibridge.git
+aibridge setup
+```
+
+### With pipx (isolated)
+
+```bash
+pipx install git+https://github.com/yudhaharsanto/aibridge.git
+aibridge setup
+```
+
+Requirements:
+
+- Python 3.10 or later
+- One-time ~200 MB download of the Camoufox browser binary during `aibridge setup`
+
+## Quick start
+
+```bash
+# 1. One-time setup: fetch browser, create config dirs
+aibridge setup
+
+# 2. Log in to the providers you want (opens a browser window)
 aibridge login monica
 aibridge login perplexity
+
+# 3. Start the bridge as a background daemon
+aibridge start monica
+aibridge start perplexity
+
+# 4. (optional) Install autostart so services boot at login
+aibridge install-service monica
+aibridge install-service perplexity
+
+# 5. (optional) Register everything in 9router
+aibridge register-9router monica
+aibridge register-9router perplexity
 ```
 
-Camoufox kebuka, login manual, tab aibridge otomatis detect + save session.
+## Using it
 
-### 2. Jalanin server
+Once the daemons are running, each provider exposes an OpenAI-compatible HTTP
+server on `127.0.0.1`:
+
+- Monica: `http://127.0.0.1:18788/v1`
+- Perplexity: `http://127.0.0.1:18790/v1`
+
+Call it like any other OpenAI API:
 
 ```bash
-aibridge serve monica         # default port 18788
-aibridge serve perplexity     # default port 18789
+curl http://127.0.0.1:18788/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
 ```
 
-Atau semua sekaligus:
+### Integrating with 9router
+
+After `aibridge register-9router monica`, 9router exposes the models with a
+prefix:
 
 ```bash
-aibridge serve --all
+curl http://localhost:20128/v1/chat/completions \
+  -H 'Authorization: Bearer <your-9router-key>' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "monica/claude-sonnet-4-6",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
 ```
 
-### 3. Hubungin ke tool
+### Integrating with Trae / Cline / Continue
 
-Endpoint OpenAI-compatible:
-
-```
-http://localhost:18788/v1/chat/completions    # monica
-http://localhost:18789/v1/chat/completions    # perplexity
-```
-
-API key: `aibridge-local` (tidak di-verify, tapi tool biasanya wajib isi)
-
-#### 9router integration
-
-Tambahin provider-node di dashboard 9router → type `openai-compatible`, prefix
-`monica` / `perplexity`, base URL sesuai port di atas.
-
-#### Langsung di Trae / Cline / etc
+Point the OpenAI-compatible base URL at aibridge (or 9router if you use it):
 
 ```
-Endpoint: http://localhost:18788/v1
-API Key:  aibridge-local
-Model:    claude-sonnet-4-6
+Base URL:  http://127.0.0.1:18788/v1
+API key:   aibridge-local    (any non-empty string works)
+Model:     claude-sonnet-4-6
 ```
 
-## Commands
+## CLI reference
 
 ```
-aibridge login <provider>          open Camoufox, login manual, save session
-aibridge serve <provider> [--port] start OpenAI-compatible HTTP server
-aibridge serve --all               serve all logged-in providers
-aibridge test <provider>           smoke test: kirim "ping", ekspektasi reply
-aibridge list                      list provider & status (logged-in?)
-aibridge logout <provider>         clear saved session
+aibridge setup                       fetch Camoufox browser (one-time)
+
+aibridge login <provider>            open a browser, log in, save the session
+aibridge logout <provider>           delete the saved session
+
+aibridge start <provider>            start a background daemon
+aibridge stop <provider>             stop the daemon
+aibridge restart <provider>          restart the daemon
+aibridge status <provider>           check if the daemon is running
+aibridge logs <provider> [-f] [-n N] view / tail the daemon log
+aibridge serve <provider>            run in the foreground (useful for debugging)
+
+aibridge test <provider>             send a ping message end-to-end
+
+aibridge install-service <provider>  register OS autostart
+                                     (launchd on macOS, systemd --user on Linux)
+aibridge uninstall-service <provider>
+
+aibridge register-9router <provider> create / update provider-node + connection
+aibridge unregister-9router <provider>
+aibridge list-9router                list provider-nodes registered in 9router
+aibridge set-9router-key <key>       save your 9router API key locally
+aibridge set-9router-url <url>       override the default 9router base URL
+
+aibridge list                        show all providers and their status
 ```
 
-## Config
+## Configuration
 
-Semua disimpan di `~/.aibridge/`:
+All local state lives under `~/.aibridge/`:
 
 ```
 ~/.aibridge/
-├── sessions/          # storage_state.json per provider
+├── sessions/          # Playwright storage_state per provider (cookies, etc.)
 │   ├── monica.json
 │   └── perplexity.json
-├── config.toml        # port, model mapping, dll
-└── logs/              # stdout/stderr per serve
+├── run/               # PID files for running daemons
+├── logs/              # Daemon stdout/stderr logs
+├── .9router-key       # Saved 9router API key (chmod 600)
+└── .9router-url       # Saved 9router base URL (optional)
 ```
+
+Environment overrides:
+
+| Variable                   | Purpose                                    |
+| -------------------------- | ------------------------------------------ |
+| `AIBRIDGE_HOME`            | Override the base config directory          |
+| `AIBRIDGE_9ROUTER_KEY`     | Override the stored 9router API key         |
+| `AIBRIDGE_9ROUTER_URL`     | Override the 9router base URL               |
+| `AIBRIDGE_SHOW_DOCK`       | Set to `1` to show the dock icon on macOS   |
+| `MONICA_PROXY_PORT`        | Override the default Monica port (18788)    |
+
+## Uninstall
+
+```bash
+aibridge stop monica
+aibridge stop perplexity
+aibridge uninstall-service monica
+aibridge uninstall-service perplexity
+pip uninstall aibridge
+
+# Optional: remove local state (sessions, logs, keys)
+rm -rf ~/.aibridge
+```
+
+## How it works
+
+Every provider runs its own persistent Camoufox browser context. On `login`,
+the browser opens, the user signs in manually, and Playwright saves the full
+`storage_state` (cookies + localStorage) to disk.
+
+On `start`, aibridge boots that browser context headless. HTTP requests flow
+through `page.evaluate()` using the browser's native `fetch`, so they inherit
+the session cookies, TLS fingerprint, and User-Agent of the logged-in user.
+Responses are streamed back to Python via a polled buffer (works around a
+Firefox + Playwright `expose_binding` quirk).
+
+No DOM scraping is involved: aibridge replays the same REST / SSE endpoints
+the Monica and Perplexity web apps use internally. Those endpoints are
+reverse-engineered and translated to the OpenAI chat-completions shape.
+
+## Contributing
+
+Issues and PRs welcome. The scraper selectors and payloads are reverse
+engineered from a running browser session, so they can break when the
+upstream site ships a redesign — pull requests updating them are especially
+appreciated.
 
 ## License
 

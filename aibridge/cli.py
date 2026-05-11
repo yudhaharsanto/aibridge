@@ -165,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    sub.add_parser("setup", help="download Camoufox browser and prepare config dirs")
+
     sp = sub.add_parser("login", help="open Camoufox and login to provider")
     sp.add_argument("provider", choices=sorted(PROVIDERS))
 
@@ -234,14 +236,22 @@ def main(argv: list[str] | None = None) -> int:
 
     args = p.parse_args(argv)
     _setup_log(args.verbose)
-    need_camoufox_installed()
 
     cmd = args.cmd
 
-    # Untuk daemon-mode subcommands, hide dock icon (macOS).
-    # 'login' tetep munculin biar user bisa interact sama browser window.
+    # 'setup' is the bootstrap command — it also verifies camoufox.
+    # For everything else, we still need the package installed.
+    if cmd != "setup":
+        need_camoufox_installed()
+
+    # Daemon-mode commands run hidden on macOS (no dock icon).
+    # 'login' stays visible so the user can interact with the browser.
     if cmd in ("serve", "start", "test"):
         hide_dock_icon()
+
+    if cmd == "setup":
+        from . import bootstrap
+        return bootstrap.run()
 
     if cmd == "login":
         return asyncio.run(cmd_login(args.provider))

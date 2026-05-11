@@ -54,13 +54,21 @@ def _alive(pid: int) -> bool:
 
 
 def _aibridge_exe() -> str:
-    """Return the aibridge entry point (sys.argv[0] fallback to 'aibridge')."""
-    # If installed via ./install.sh, there's a shim in ~/.local/bin/aibridge
-    # that execs .venv/bin/aibridge. We prefer the venv entrypoint since it
-    # has the correct Python baked in.
-    venv_bin = Path(sys.executable).parent / "aibridge"
-    if venv_bin.exists():
-        return str(venv_bin)
+    """
+    Return a command suitable for spawning a child aibridge process.
+
+    Preference order:
+    1. The `aibridge` console script alongside the active Python interpreter
+       (works for venv, pipx, or any system install).
+    2. A bare "aibridge" fallback (relies on PATH).
+    """
+    # Most Python installs put console scripts next to the interpreter.
+    for candidate in (
+        Path(sys.executable).parent / "aibridge",
+        Path(sys.executable).parent / "aibridge.exe",
+    ):
+        if candidate.exists():
+            return str(candidate)
     return "aibridge"
 
 
