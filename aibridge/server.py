@@ -9,6 +9,7 @@ from typing import Any
 
 from aiohttp import web
 
+from . import tokens
 from .providers import ChatRequest, available, get_provider_class
 
 log = logging.getLogger("aibridge.server")
@@ -63,7 +64,23 @@ async def build_app(provider_name: str, *, headless: bool = True) -> web.Applica
     provider = cls(headless=headless)
     await provider.start()
 
-    async def handle_models(_request: web.Request) -> web.Response:
+    expected_token = tokens.get(provider.name)
+
+    def _auth_ok(request: web.Request) -> bool:
+        """Bearer auth. Empty / missing is rejected when token is set."""
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+            if token == expected_token:
+                return True
+        # Also accept X-API-Key for tools that don't send Authorization header.
+        if request.headers.get("X-API-Key", "").strip() == expected_token:
+            return True
+        return False
+
+    async def handle_models(request: web.Request) -> web.Response:
+        if not _auth_ok(request):
+            return _cors(web.json_response({"error": "invalid api key"}, status=401))
         data = [
             {"id": m, "object": "model", "owned_by": provider.name}
             for m in provider.models
@@ -71,6 +88,8 @@ async def build_app(provider_name: str, *, headless: bool = True) -> web.Applica
         return _cors(web.json_response({"object": "list", "data": data}))
 
     async def handle_chat(request: web.Request) -> web.StreamResponse:
+        if not _auth_ok(request):
+            return _cors(web.json_response({"error": "invalid api key"}, status=401))
         try:
             body = await request.json()
         except Exception:

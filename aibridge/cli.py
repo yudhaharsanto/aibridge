@@ -109,16 +109,108 @@ async def cmd_serve_fg(provider: str, port: int | None, headed: bool) -> int:
 
 def cmd_list() -> int:
     from .daemon import _read_pid
-    print(f"{'provider':<15} {'logged-in':<10} {'running':<16} {'models':<6} port")
-    print("-" * 65)
+    from . import tokens
+    print(f"{'provider':<15} {'logged-in':<10} {'running':<16} {'models':<6} {'port':<6} api key")
+    print("-" * 95)
     for name, info in PROVIDERS.items():
         logged_in = session_path(name).exists()
         cls = get_provider_class(name)
         pid = _read_pid(name)
         run_s = f"yes (pid {pid})" if pid else "no"
+        key = tokens.get(name)
+        key_disp = key[:12] + "…" + key[-4:] if len(key) > 20 else key
         print(f"{name:<15} {'yes' if logged_in else 'no':<10} "
-              f"{run_s:<16} {len(cls.models):<6} {info.default_port}")
+              f"{run_s:<16} {len(cls.models):<6} {info.default_port:<6} {key_disp}")
     return 0
+
+
+# -------------------- key management --------------------
+
+def cmd_key_show(provider: str | None) -> int:
+    from . import tokens
+    if provider and provider != "all":
+        if provider not in PROVIDERS:
+            print(f"error: unknown provider '{provider}'", file=sys.stderr)
+            return 2
+        key = tokens.get(provider)
+        port = PROVIDERS[provider].default_port
+        print(f"{provider}:")
+        print(f"  url: http://127.0.0.1:{port}/v1")
+        print(f"  key: {key}")
+        return 0
+    # all
+    for name, info in PROVIDERS.items():
+        key = tokens.get(name)
+        print(f"{name}:")
+        print(f"  url: http://127.0.0.1:{info.default_port}/v1")
+        print(f"  key: {key}")
+    return 0
+
+
+def cmd_key_set(provider: str, new_key: str) -> int:
+    from . import tokens
+    if provider not in PROVIDERS:
+        print(f"error: unknown provider '{provider}'", file=sys.stderr)
+        return 2
+    if not new_key.strip():
+        print("error: key cannot be empty", file=sys.stderr)
+        return 2
+    tokens.set_key(provider, new_key)
+    print(f"==> {provider} key updated")
+    print(f"    restart the daemon for it to take effect:")
+    print(f"      aibridge restart {provider}")
+    return 0
+
+
+def cmd_key_rotate(provider: str) -> int:
+    from . import tokens
+    if provider not in PROVIDERS:
+        print(f"error: unknown provider '{provider}'", file=sys.stderr)
+        return 2
+    new_key = tokens.rotate(provider)
+    print(f"==> {provider} key rotated")
+    print(f"    new key: {new_key}")
+    print(f"    restart the daemon for it to take effect:")
+    print(f"      aibridge restart {provider}")
+    return 0
+
+
+def cmd_key_test(provider: str) -> int:
+    """Live-validate the stored API key by hitting the running daemon."""
+    import urllib.request
+    import urllib.error
+    from . import tokens
+    from .daemon import _read_pid
+
+    if provider not in PROVIDERS:
+        print(f"error: unknown provider '{provider}'", file=sys.stderr)
+        return 2
+
+    pid = _read_pid(provider)
+    if not pid:
+        print(f"error: {provider} daemon not running. start it first:", file=sys.stderr)
+        print(f"         aibridge start {provider}", file=sys.stderr)
+        return 1
+
+    port = PROVIDERS[provider].default_port
+    key = tokens.get(provider)
+    url = f"http://127.0.0.1:{port}/v1/models"
+
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = resp.read().decode("utf-8", "replace")[:200]
+            print(f"==> {provider} key OK ({resp.status})")
+            print(f"    url: {url}")
+            print(f"    key: {key}")
+            return 0
+    except urllib.error.HTTPError as e:
+        print(f"==> {provider} key FAILED ({e.code})", file=sys.stderr)
+        print(f"    url: {url}", file=sys.stderr)
+        return 1
+    except urllib.error.URLError as e:
+        print(f"==> could not reach {provider} daemon: {e.reason}", file=sys.stderr)
+        return 1
 
 
 def cmd_logout(provider: str) -> int:
@@ -160,6 +252,22 @@ async def cmd_test(provider: str) -> int:
 
 # -------------------- entrypoint --------------------
 
+def _fanout(provider: str, fn) -> int:
+    """Run `fn(provider)` for a single provider, or for every provider when
+    `provider == 'all'`. Returns the max of all return codes (worst case)."""
+    if provider != "all":
+        return fn(provider)
+    rc = 0
+    first = True
+    for name in PROVIDERS:
+        if not first:
+            print()
+        first = False
+        print(f"---- {name} ----")
+        rc = max(rc, fn(name) or 0)
+    return rc
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser("aibridge", description="bridge web-only AI to OpenAI API")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -177,21 +285,21 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--foreground", "-F", action="store_true",
                     help="force foreground (default is foreground; used by daemon)")
 
-    sp = sub.add_parser("start", help="start as background daemon")
-    sp.add_argument("provider", choices=sorted(PROVIDERS))
+    sp = sub.add_parser("start", help="start as background daemon (use 'all' for every provider)")
+    sp.add_argument("provider", choices=sorted(PROVIDERS) + ["all"])
     sp.add_argument("--port", type=int, default=None)
     sp.add_argument("--headed", action="store_true")
 
-    sp = sub.add_parser("stop", help="stop background daemon")
-    sp.add_argument("provider", choices=sorted(PROVIDERS))
+    sp = sub.add_parser("stop", help="stop background daemon (use 'all' for every provider)")
+    sp.add_argument("provider", choices=sorted(PROVIDERS) + ["all"])
 
-    sp = sub.add_parser("restart", help="restart background daemon")
-    sp.add_argument("provider", choices=sorted(PROVIDERS))
+    sp = sub.add_parser("restart", help="restart background daemon (use 'all' for every provider)")
+    sp.add_argument("provider", choices=sorted(PROVIDERS) + ["all"])
     sp.add_argument("--port", type=int, default=None)
     sp.add_argument("--headed", action="store_true")
 
-    sp = sub.add_parser("status", help="check daemon status")
-    sp.add_argument("provider", choices=sorted(PROVIDERS))
+    sp = sub.add_parser("status", help="check daemon status (use 'all' for every provider)")
+    sp.add_argument("provider", choices=sorted(PROVIDERS) + ["all"])
 
     sp = sub.add_parser("logs", help="tail logs")
     sp.add_argument("provider", choices=sorted(PROVIDERS))
@@ -225,6 +333,23 @@ def main(argv: list[str] | None = None) -> int:
 
     sp = sub.add_parser("set-9router-url", help="save 9router base URL")
     sp.add_argument("url")
+
+    sp = sub.add_parser("key", help="manage per-provider API keys for the local HTTP server")
+    key_sub = sp.add_subparsers(dest="key_cmd", required=True)
+
+    sp2 = key_sub.add_parser("show", help="show API key(s) — omit provider for all")
+    sp2.add_argument("provider", nargs="?", default="all",
+                     choices=sorted(PROVIDERS) + ["all"])
+
+    sp2 = key_sub.add_parser("set", help="set a custom API key for a provider")
+    sp2.add_argument("provider", choices=sorted(PROVIDERS))
+    sp2.add_argument("new_key", help="the new API key string")
+
+    sp2 = key_sub.add_parser("rotate", help="generate a new random API key for a provider")
+    sp2.add_argument("provider", choices=sorted(PROVIDERS))
+
+    sp2 = key_sub.add_parser("test", help="verify a provider's API key against its running daemon")
+    sp2.add_argument("provider", choices=sorted(PROVIDERS))
 
     sub.add_parser("list", help="list providers, login & daemon status")
 
@@ -261,20 +386,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "start":
         from .daemon import start_daemon
-        return start_daemon(args.provider, port=args.port, headed=args.headed)
+        return _fanout(args.provider,
+                       lambda p: start_daemon(p, port=args.port, headed=args.headed))
 
     if cmd == "stop":
         from .daemon import stop_daemon
-        return stop_daemon(args.provider)
+        return _fanout(args.provider, stop_daemon)
 
     if cmd == "restart":
         from .daemon import stop_daemon, start_daemon
-        stop_daemon(args.provider)
-        return start_daemon(args.provider, port=args.port, headed=args.headed)
+        def _restart(p: str) -> int:
+            stop_daemon(p)
+            return start_daemon(p, port=args.port, headed=args.headed)
+        return _fanout(args.provider, _restart)
 
     if cmd == "status":
         from .daemon import status_daemon
-        return status_daemon(args.provider)
+        return _fanout(args.provider, status_daemon)
 
     if cmd == "logs":
         from .daemon import tail_logs
@@ -307,6 +435,17 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "set-9router-url":
         from . import router9
         return router9.set_url(args.url)
+
+    if cmd == "key":
+        if args.key_cmd == "show":
+            return cmd_key_show(args.provider)
+        if args.key_cmd == "set":
+            return cmd_key_set(args.provider, args.new_key)
+        if args.key_cmd == "rotate":
+            return cmd_key_rotate(args.provider)
+        if args.key_cmd == "test":
+            return cmd_key_test(args.provider)
+        return 2
 
     if cmd == "list":
         return cmd_list()

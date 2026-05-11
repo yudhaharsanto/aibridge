@@ -85,9 +85,8 @@ aibridge setup
 aibridge login monica
 aibridge login perplexity
 
-# 3. Start the bridge as a background daemon
-aibridge start monica
-aibridge start perplexity
+# 3. Start the bridges as background daemons
+aibridge start all          # or: aibridge start monica
 
 # 4. (optional) Install autostart so services boot at login
 aibridge install-service monica
@@ -98,6 +97,13 @@ aibridge register-9router monica
 aibridge register-9router perplexity
 ```
 
+Each provider gets its own local HTTP endpoint + API key. View them with:
+
+```bash
+aibridge list          # summary (URL/port/key preview)
+aibridge key show      # full URL + key for every provider
+```
+
 ## Using it
 
 Once the daemons are running, each provider exposes an OpenAI-compatible HTTP
@@ -106,16 +112,34 @@ server on `127.0.0.1`:
 - Monica: `http://127.0.0.1:18788/v1`
 - Perplexity: `http://127.0.0.1:18790/v1`
 
-Call it like any other OpenAI API:
+Each provider is protected by its own **API key**. Find the current key with
+`aibridge key show`. Pass it as `Authorization: Bearer <key>` or as the
+`X-API-Key` header:
 
 ```bash
 curl http://127.0.0.1:18788/v1/chat/completions \
+  -H "Authorization: Bearer $(aibridge key show monica | awk '/key:/{print $2}')" \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "claude-sonnet-4-6",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
+
+### Managing API keys
+
+Keys are generated automatically the first time a provider starts and stored
+in `~/.aibridge/tokens.json` (chmod 600).
+
+```bash
+aibridge key show                  # show every provider's url + key
+aibridge key show monica           # show one provider
+aibridge key set monica my-key     # set a custom key
+aibridge key rotate monica         # generate a fresh random key
+aibridge key test monica           # validate the stored key against the running daemon
+```
+
+After changing a key: `aibridge restart <provider>` to apply.
 
 ### Integrating with 9router
 
@@ -150,7 +174,7 @@ Point them at aibridge directly, or at 9router if you use it:
 ```
 Base URL:  http://127.0.0.1:18788/v1          (direct to aibridge)
            http://localhost:20128/v1          (via 9router)
-API key:   aibridge-local                     (any non-empty string)
+API key:   run 'aibridge key show <provider>' to see it
 Model:     claude-sonnet-4-6                  (or monica/claude-sonnet-4-6 via 9router)
 ```
 
@@ -166,14 +190,19 @@ aibridge setup                       fetch Camoufox browser (one-time)
 aibridge login <provider>            open a browser, log in, save the session
 aibridge logout <provider>           delete the saved session
 
-aibridge start <provider>            start a background daemon
-aibridge stop <provider>             stop the daemon
-aibridge restart <provider>          restart the daemon
-aibridge status <provider>           check if the daemon is running
+aibridge start <provider|all>        start background daemon(s)
+aibridge stop <provider|all>         stop daemon(s)
+aibridge restart <provider|all>      restart daemon(s)
+aibridge status <provider|all>       daemon status
 aibridge logs <provider> [-f] [-n N] view / tail the daemon log
 aibridge serve <provider>            run in the foreground (useful for debugging)
 
 aibridge test <provider>             send a ping message end-to-end
+
+aibridge key show [provider|all]     show API key(s) for the local HTTP server
+aibridge key set <provider> <key>    set a custom API key
+aibridge key rotate <provider>       generate a new random API key
+aibridge key test <provider>         verify the stored key against the running daemon
 
 aibridge install-service <provider>  register OS autostart
                                      (launchd on macOS, systemd --user on Linux)
@@ -199,6 +228,7 @@ All local state lives under `~/.aibridge/`:
 │   └── perplexity.json
 ├── run/               # PID files for running daemons
 ├── logs/              # Daemon stdout/stderr logs
+├── tokens.json        # Per-provider client API keys (chmod 600)
 ├── .9router-key       # Saved 9router API key (chmod 600)
 └── .9router-url       # Saved 9router base URL (optional)
 ```

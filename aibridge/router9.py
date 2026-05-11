@@ -183,10 +183,13 @@ def register(provider: str, *, port: int | None = None, prefix: str | None = Non
         print(f"==> created provider-node: id={node_id}, prefix={prefix}, baseUrl={local_base}")
 
     # ---- 2) ensure active connection (credential) ----
+    from . import tokens as _tokens
+    local_api_key = _tokens.get(provider)
+
     conn_existing = _find_connection_by_node(key, base, node_id)
     conn_payload = {
         "provider": node_id,
-        "apiKey": "aibridge-local",
+        "apiKey": local_api_key,
         "name": name,
         "priority": 1,
         "providerSpecificData": {

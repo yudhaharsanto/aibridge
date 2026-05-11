@@ -75,11 +75,71 @@ def _aibridge_exe() -> str:
 # -------------------- start / stop / status --------------------
 
 def start_daemon(provider: str, *, port: int | None, headed: bool) -> int:
-    existing = _read_pid(provider)
-    if existing:
-        print(f"==> already running (pid {existing})")
+    from .config import PROVIDERS
+
+    check_port = port or PROVIDERS[provider].default_port
+
+    # Clean out any stale/conflicting processes first so we start from a known state.
+    existing_pid = _read_pid(provider)
+    existing_alive = existing_pid and _alive(existing_pid)
+    port_holders = _pids_on_port(check_port)
+
+    if existing_alive and existing_pid in port_holders and len(port_holders) == 1:
+        print(f"==> already running (pid {existing_pid})")
+        _print_endpoint(provider, port)
         return 0
 
+    # Stale pid file, or stray process holding the port without matching our pid file.
+    # Clean up everything on that port so we can start fresh.
+    if port_holders:
+        for pp in port_holders:
+            try:
+                os.kill(pp, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        time.sleep(1.5)
+        for pp in _pids_on_port(check_port):
+            try:
+                os.kill(pp, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        time.sleep(0.5)
+    _pid_file(provider).unlink(missing_ok=True)
+
+    # If launchd plist exists, let launchd own the process (it'll KeepAlive-respawn
+    # on exit). Otherwise spawn our own managed subprocess.
+    plist = LAUNCHD_PLIST_DIR / f"{LAUNCHD_LABEL.format(provider=provider)}.plist"
+    if _platform() == "macos" and plist.exists():
+        uid = os.getuid()
+        # Ensure not already bootstrapped (bootout is idempotent / safe when absent)
+        subprocess.run(
+            ["/bin/launchctl", "bootout", f"gui/{uid}", str(plist)],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        time.sleep(0.5)
+        rc = subprocess.run(
+            ["/bin/launchctl", "bootstrap", f"gui/{uid}", str(plist)],
+            check=False, capture_output=True, text=True,
+        )
+        if rc.returncode != 0:
+            print(f"==> launchctl bootstrap failed: {rc.stderr.strip()}", file=sys.stderr)
+            return 1
+        # Poll for the port to come up
+        for _ in range(20):  # up to 10s
+            time.sleep(0.5)
+            pids = _pids_on_port(check_port)
+            if pids:
+                _pid_file(provider).write_text(str(pids[0]))
+                print(f"==> started {provider} (pid {pids[0]}, launchd)")
+                _print_endpoint(provider, port)
+                print(f"    log: {log_path(provider)}")
+                return 0
+        print(f"==> launchd bootstrapped but no listener on :{check_port} after 10s",
+              file=sys.stderr)
+        _tail_to_stderr(log_path(provider), n=30)
+        return 1
+
+    # No launchd: spawn our own subprocess
     log = log_path(provider)
     log.parent.mkdir(parents=True, exist_ok=True)
 
@@ -102,48 +162,127 @@ def start_daemon(provider: str, *, port: int | None, headed: bool) -> int:
         )
 
     _pid_file(provider).write_text(str(proc.pid))
-    # Kasih waktu Camoufox boot + HTTP bind (berat ~3-8s).
-    time.sleep(6)
+    time.sleep(6)  # Camoufox cold start
     if not _alive(proc.pid):
         print(f"==> failed to start. last log ({log}):", file=sys.stderr)
         _tail_to_stderr(log, n=30)
         _pid_file(provider).unlink(missing_ok=True)
         return 1
-    print(f"==> started {provider} (pid {proc.pid}), log: {log}")
+    print(f"==> started {provider} (pid {proc.pid})")
+    _print_endpoint(provider, port)
+    print(f"    log: {log}")
     return 0
 
 
-def stop_daemon(provider: str) -> int:
-    pid = _read_pid(provider)
-    if not pid:
-        print(f"==> {provider} not running")
-        _pid_file(provider).unlink(missing_ok=True)
-        return 0
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+def _print_endpoint(provider: str, port: int | None) -> None:
+    """Print the HTTP endpoint + current API token after a successful start."""
+    from .config import PROVIDERS
+    from . import tokens
 
-    # Wait up to 10s for clean exit
-    for _ in range(50):
-        if not _alive(pid):
-            break
-        time.sleep(0.2)
-    else:
+    p = port or PROVIDERS[provider].default_port
+    url = f"http://127.0.0.1:{p}/v1"
+    key = tokens.get(provider)
+    print(f"    url:  {url}")
+    print(f"    key:  {key}")
+
+
+def stop_daemon(provider: str) -> int:
+    """
+    Stop the daemon. Three-pronged:
+    1. If launchd-managed service is installed, bootout it (so it doesn't respawn).
+    2. Kill the pid from our pid file.
+    3. Fallback: kill anything currently listening on the provider's default port.
+    """
+    from .config import PROVIDERS
+    port = PROVIDERS[provider].default_port
+
+    killed = False
+
+    # 1. launchd bootout (macOS) — suspend so it doesn't respawn during our stop.
+    if _platform() == "macos":
+        plist = LAUNCHD_PLIST_DIR / f"{LAUNCHD_LABEL.format(provider=provider)}.plist"
+        if plist.exists():
+            uid = os.getuid()
+            subprocess.run(
+                ["/bin/launchctl", "bootout", f"gui/{uid}", str(plist)],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+    # 2. Kill the pid from pid file.
+    pid = _read_pid(provider)
+    if pid:
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, signal.SIGTERM)
+            killed = True
+        except ProcessLookupError:
+            pass
+        for _ in range(50):
+            if not _alive(pid):
+                break
+            time.sleep(0.2)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    # 3. Fallback: anything still holding the port? Kill it.
+    for port_pid in _pids_on_port(port):
+        try:
+            os.kill(port_pid, signal.SIGTERM)
+            killed = True
+        except ProcessLookupError:
+            pass
+    # Second pass after grace period
+    time.sleep(1.5)
+    for port_pid in _pids_on_port(port):
+        try:
+            os.kill(port_pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
 
     _pid_file(provider).unlink(missing_ok=True)
-    print(f"==> stopped {provider}")
+    if killed:
+        print(f"==> stopped {provider}")
+    else:
+        print(f"==> {provider} not running")
     return 0
 
 
+def _pids_on_port(port: int) -> list[int]:
+    """Return PIDs listening on the given TCP port (127.0.0.1)."""
+    try:
+        out = subprocess.run(
+            ["/usr/sbin/lsof", "-nP", "-iTCP:" + str(port), "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        ).stdout.strip()
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return []
+    pids: list[int] = []
+    for line in out.splitlines():
+        try:
+            pids.append(int(line.strip()))
+        except ValueError:
+            pass
+    return pids
+
+
 def status_daemon(provider: str) -> int:
+    from .config import PROVIDERS
     pid = _read_pid(provider)
-    if pid:
+    # Cross-check with launchd-managed state
+    port_pids = _pids_on_port(PROVIDERS[provider].default_port)
+    if pid and _alive(pid):
         print(f"{provider}: running (pid {pid})")
+        return 0
+    if port_pids:
+        # Launchd or another instance is running; sync our pid file.
+        _pid_file(provider).write_text(str(port_pids[0]))
+        print(f"{provider}: running (pid {port_pids[0]}, launchd-managed)")
         return 0
     print(f"{provider}: stopped")
     return 1
