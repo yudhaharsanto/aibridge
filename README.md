@@ -4,14 +4,24 @@ Bridge web-only AI providers (Monica, Perplexity) to an OpenAI / Anthropic
 compatible HTTP API — no official API keys required, just your own browser
 session through an anti-detect browser (Camoufox).
 
-Works with any tool that speaks the OpenAI API: [Trae](https://trae.ai),
-[Cline](https://github.com/cline/cline), [Continue.dev](https://continue.dev),
-[Claude Code](https://claude.ai/code), [9router](https://github.com/9router/9router),
-or your own scripts.
+aibridge works with **any client that speaks the OpenAI API**, and pairs
+especially well with [9router](https://9router.com) as a unified gateway.
+Some examples of clients it's been tested with:
+
+- [Trae](https://trae.ai)
+- [Cline](https://github.com/cline/cline) (VSCode extension)
+- [Continue.dev](https://continue.dev)
+- [Roo Code](https://github.com/RooCodeInc/Roo-Code)
+- [Aider](https://aider.chat)
+- [Claude Code](https://claude.ai/code) (via 9router)
+- [LibreChat](https://librechat.ai)
+- [Open WebUI](https://openwebui.com)
+- [Cursor](https://cursor.com) (via 9router)
+- Your own scripts / curl / any OpenAI SDK
 
 ```
 ┌──────────┐   OpenAI API    ┌──────────┐   browser fetch   ┌─────────────┐
-│   Trae   │  ─────────────▶ │ aibridge │  ───────────────▶ │  monica.im  │
+│  client  │  ─────────────▶ │ aibridge │  ───────────────▶ │  monica.im  │
 └──────────┘                 └──────────┘                   │ perplexity  │
                                    ▲                        └─────────────┘
                              Camoufox (logged-in)
@@ -109,8 +119,17 @@ curl http://127.0.0.1:18788/v1/chat/completions \
 
 ### Integrating with 9router
 
-After `aibridge register-9router monica`, 9router exposes the models with a
-prefix:
+[9router](https://9router.com) is a local gateway that aggregates multiple
+OpenAI-compatible providers behind a single endpoint. It's the easiest way to
+expose aibridge to every client at once — once registered in 9router, any
+tool that can point at `http://localhost:20128/v1` will see all your models.
+
+```bash
+aibridge register-9router monica
+aibridge register-9router perplexity
+```
+
+Then from any client:
 
 ```bash
 curl http://localhost:20128/v1/chat/completions \
@@ -122,15 +141,22 @@ curl http://localhost:20128/v1/chat/completions \
   }'
 ```
 
-### Integrating with Trae / Cline / Continue
+### Integrating with an OpenAI-compatible client
 
-Point the OpenAI-compatible base URL at aibridge (or 9router if you use it):
+Most coding assistants (Trae, Cline, Continue, Roo Code, Aider, Cursor,
+LibreChat, Open WebUI, etc.) accept a custom OpenAI-compatible endpoint.
+Point them at aibridge directly, or at 9router if you use it:
 
 ```
-Base URL:  http://127.0.0.1:18788/v1
-API key:   aibridge-local    (any non-empty string works)
-Model:     claude-sonnet-4-6
+Base URL:  http://127.0.0.1:18788/v1          (direct to aibridge)
+           http://localhost:20128/v1          (via 9router)
+API key:   aibridge-local                     (any non-empty string)
+Model:     claude-sonnet-4-6                  (or monica/claude-sonnet-4-6 via 9router)
 ```
+
+Check each client's docs for where to configure a "custom provider" or
+"OpenAI-compatible endpoint" — the option is usually under **Settings →
+Providers / Models**.
 
 ## CLI reference
 
