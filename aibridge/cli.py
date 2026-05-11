@@ -16,6 +16,8 @@ from .providers import get_provider_class
 from .providers import monica as _monica  # noqa: F401
 from .providers import perplexity as _perplexity  # noqa: F401
 
+from . import __version__
+
 
 def _setup_log(verbose: bool) -> None:
     logging.basicConfig(
@@ -270,10 +272,20 @@ def _fanout(provider: str, fn) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser("aibridge", description="bridge web-only AI to OpenAI API")
+    p.add_argument("-V", "--version", action="version",
+                   version=f"aibridge {__version__}")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("setup", help="download Camoufox browser and prepare config dirs")
+    sub.add_parser("version", help="show installed version")
+    sub.add_parser("check-update", help="check if a newer version is available on GitHub")
+
+    sp = sub.add_parser("update", help="upgrade aibridge to the latest version")
+    sp.add_argument("--ref", default="main",
+                    help="git ref/branch/tag to install (default: main)")
+
+    sub.add_parser("doctor", help="run a health check and suggest fixes")
 
     sp = sub.add_parser("login", help="open Camoufox and login to provider")
     sp.add_argument("provider", choices=sorted(PROVIDERS))
@@ -364,9 +376,9 @@ def main(argv: list[str] | None = None) -> int:
 
     cmd = args.cmd
 
-    # 'setup' is the bootstrap command — it also verifies camoufox.
-    # For everything else, we still need the package installed.
-    if cmd != "setup":
+    # 'setup', 'version', 'update', 'check-update', 'doctor' are bootstrap-level
+    # commands — they don't require the camoufox browser.
+    if cmd not in ("setup", "version", "update", "check-update", "doctor"):
         need_camoufox_installed()
 
     # Daemon-mode commands run hidden on macOS (no dock icon).
@@ -377,6 +389,22 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "setup":
         from . import bootstrap
         return bootstrap.run()
+
+    if cmd == "version":
+        print(f"aibridge {__version__}")
+        return 0
+
+    if cmd == "check-update":
+        from . import updater
+        return updater.check()
+
+    if cmd == "update":
+        from . import updater
+        return updater.upgrade(source=args.ref)
+
+    if cmd == "doctor":
+        from . import doctor
+        return doctor.run()
 
     if cmd == "login":
         return asyncio.run(cmd_login(args.provider))

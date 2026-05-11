@@ -1,5 +1,7 @@
 # aibridge
 
+[![GitHub](https://img.shields.io/github/v/tag/yudhaharsanto/aibridge?label=release&sort=semver)](https://github.com/yudhaharsanto/aibridge/releases)
+
 Bridge web-only AI providers (Monica, Perplexity) to an OpenAI / Anthropic
 compatible HTTP API — no official API keys required, just your own browser
 session through an anti-detect browser (Camoufox).
@@ -242,6 +244,62 @@ Environment overrides:
 | `AIBRIDGE_9ROUTER_URL`     | Override the 9router base URL               |
 | `AIBRIDGE_SHOW_DOCK`       | Set to `1` to show the dock icon on macOS   |
 | `MONICA_PROXY_PORT`        | Override the default Monica port (18788)    |
+
+## Upgrading
+
+```bash
+aibridge check-update   # see if a new version is out
+aibridge update         # upgrade to latest main
+aibridge restart all    # apply changes to running daemons
+```
+
+`aibridge update` runs `pip install --upgrade git+https://github.com/yudhaharsanto/aibridge.git`
+using the same Python interpreter aibridge was installed with — it works for
+both `pip` and `pipx` installs.
+
+When upgrading across a breaking change (e.g. 0.1.x → 0.2.x), check the
+[CHANGELOG](CHANGELOG.md) for migration notes.
+
+### 0.1.x → 0.2.x migration
+
+0.2.0 introduced mandatory API key auth on the HTTP server. Anyone upgrading
+from 0.1.x needs to do this once:
+
+```bash
+aibridge update
+aibridge restart all
+
+# See the auto-generated per-provider keys:
+aibridge key show
+
+# If you use 9router, refresh its credentials so they carry the real key:
+aibridge register-9router monica
+aibridge register-9router perplexity
+```
+
+## Troubleshooting
+
+```bash
+aibridge doctor         # check environment + each provider, suggests fixes
+aibridge status all     # daemon status only
+aibridge logs monica    # recent log
+aibridge logs monica -f # follow log (like tail -f)
+```
+
+Common issues:
+
+| symptom                           | fix                                             |
+| --------------------------------- | ----------------------------------------------- |
+| `401 invalid api key`             | use the key from `aibridge key show <provider>` |
+| Daemon crashes on start           | `aibridge logs <provider>` to see the error     |
+| Port already in use               | `aibridge stop <provider>` then start again     |
+| Session expired / "please log in" | `aibridge login <provider>` to refresh          |
+| Browser fails to launch           | `aibridge setup` to re-fetch Camoufox           |
+
+If a daemon was installed with `install-service`, launchd / systemd will
+automatically restart it on crash. `aibridge start` and `aibridge stop` are
+launchd-aware and will coordinate with the service manager so you don't end
+up with two daemons racing on the same port.
 
 ## Uninstall
 
