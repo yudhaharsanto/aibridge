@@ -11,9 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Conversation continuity** — follow-up turns now land in the same thread
   on the provider side instead of spawning a brand-new chat on every call.
-  - Perplexity: `frontend_context_uuid` is now derived from the conversation
-    identity (model + message prefix) instead of a random uuid per request.
-    Follow-ups in the same chat collapse to one Perplexity thread.
+  - Perplexity: captures `backend_uuid` and `context_uuid` from each response
+    and replays them as `last_backend_uuid` / `frontend_context_uuid` on the
+    next request of the same thread. The server-side thread on perplexity.ai
+    is now extended instead of recreated on every turn (verified end-to-end:
+    follow-ups correctly recall AI-invented content from the same session and
+    a fresh `X-Session-Id` gets a clean thread).
   - Monica: `conversation_id` seed now accepts the same thread identity so
     clients with stable session ids stay on one thread even when the first
     user message is re-sent.

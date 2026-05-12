@@ -165,6 +165,11 @@ class PerplexityProvider:
     def __init__(self, *, headless: bool = True) -> None:
         self._session: BrowserSession | None = None
         self.headless = headless
+        # thread_seed -> { backend_uuid, context_uuid } captured from the
+        # previous response. We replay backend_uuid as `last_backend_uuid`
+        # on the next request of the same thread so Perplexity appends to
+        # the existing server-side thread instead of starting a new one.
+        self._thread_state: dict[str, dict[str, str]] = {}
 
     async def start(self) -> None:
         info = PROVIDERS[self.name]
@@ -187,34 +192,39 @@ class PerplexityProvider:
         query = _last_user_message(req.messages)
         model_pref = MODEL_MAP.get(req.model, req.model)
 
+        seed = req.thread_seed()
+        prior = self._thread_state.get(seed) or {}
+
         # `frontend_uuid` is per-turn (the request id); re-generate each call.
-        # `frontend_context_uuid` threads turns together on Perplexity's
-        # side — derive it deterministically from the conversation identity
-        # so follow-ups land in the same chat instead of spawning new ones.
+        # For thread continuation we rely on `last_backend_uuid` — Perplexity's
+        # server-side thread id captured from the previous response.
         fuuid = str(uuid.uuid4())
-        context_uuid = req.thread_uuid()
-        payload = {
-            "query_str": query,
-            "params": {
-                "attachments": [],
-                "language": "en-US",
-                "timezone": "Asia/Jakarta",
-                "search_focus": "internet",
-                "sources": ["web"],
-                "frontend_uuid": fuuid,
-                "mode": "copilot",
-                "model_preference": model_pref,
-                "is_related_query": False,
-                "is_sponsored": False,
-                "frontend_context_uuid": context_uuid,
-                "prompt_source": "user",
-                "query_source": "home",
-                "is_incognito": False,
-                "dsl_query": query,
-                "source": "default",
-                "client_search_results_cache_key": fuuid,
-            },
+        context_uuid = prior.get("context_uuid") or req.thread_uuid()
+        params: dict[str, Any] = {
+            "attachments": [],
+            "language": "en-US",
+            "timezone": "Asia/Jakarta",
+            "search_focus": "internet",
+            "sources": ["web"],
+            "frontend_uuid": fuuid,
+            "mode": "copilot",
+            "model_preference": model_pref,
+            "is_related_query": False,
+            "is_sponsored": False,
+            "frontend_context_uuid": context_uuid,
+            "prompt_source": "user",
+            "query_source": "home" if not prior else "followup",
+            "is_incognito": False,
+            "dsl_query": query,
+            "source": "default",
+            "client_search_results_cache_key": fuuid,
         }
+        if prior.get("backend_uuid"):
+            # Perplexity's follow-up marker. Without it the server spawns
+            # a brand-new thread for every turn.
+            params["last_backend_uuid"] = prior["backend_uuid"]
+            params["read_write_token"] = prior.get("read_write_token", "")
+        payload = {"query_str": query, "params": params}
 
         # Full raw stream buffer, tapi kita derive delta dari answer field
         # dengan tracking length yang udah di-yield.
@@ -258,6 +268,21 @@ class PerplexityProvider:
                 if data.get("final_sse_message") or data.get("status") == "COMPLETED":
                     final_data = data
         if final_data:
+            # Capture thread identifiers so the next turn with the same seed
+            # can continue the same server-side thread.
+            bk = final_data.get("backend_uuid")
+            cx = final_data.get("context_uuid")
+            rwt = final_data.get("read_write_token")
+            if bk:
+                self._thread_state[seed] = {
+                    "backend_uuid": bk,
+                    "context_uuid": cx or context_uuid,
+                    "read_write_token": rwt or "",
+                }
+                log.info(
+                    "thread seed=%s backend=%s (followup=%s)",
+                    seed[:20], bk[:8], bool(prior),
+                )
             sources = _extract_sources(final_data)
             if sources:
                 yield "\n\n**Sources:**\n"
