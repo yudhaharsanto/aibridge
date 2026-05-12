@@ -217,6 +217,38 @@ Check each client's docs for where to configure a "custom provider" or
 "OpenAI-compatible endpoint" — the option is usually under **Settings →
 Providers / Models**.
 
+### Integrating with an Anthropic-native client
+
+Clients that target the Anthropic Messages API (Claude Code, Cline,
+etc.) can hit aibridge directly at `POST /v1/messages`. Both streaming
+and non-streaming responses work, and `x-api-key` or
+`Authorization: Bearer <key>` are accepted.
+
+```bash
+curl http://127.0.0.1:18788/v1/messages \
+  -H "x-api-key: $(aibridge key show monica | awk '/key:/{print $2}')" \
+  -H 'anthropic-version: 2023-06-01' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "max_tokens": 1024,
+    "system": "You are helpful.",
+    "messages": [{"role": "user", "content": "Hello"}]
+  }'
+```
+
+Notes:
+
+- `system` accepts both a plain string and Anthropic's block-shaped form
+  (`[{"type":"text","text":"..."}]`).
+- `messages[].content` accepts a string or a list of `text` /
+  `input_text` blocks. Tool-use, tool-results, and images are ignored
+  because the underlying web providers don't expose those.
+- `stream: true` returns the full Anthropic SSE event sequence
+  (`message_start` → `content_block_start` → `ping` →
+  `content_block_delta` … → `content_block_stop` → `message_delta` →
+  `message_stop`).
+
 ## CLI reference
 
 ```

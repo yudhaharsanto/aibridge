@@ -10,6 +10,14 @@ from typing import Any
 from aiohttp import web
 
 from . import tokens
+from .anthropic import (
+    anthropic_from_openai_body,
+    anthropic_final_body,
+    anthropic_event_lines_start,
+    anthropic_event_lines_delta,
+    anthropic_event_lines_stop,
+    anthropic_stop_reason,
+)
 from .providers import ChatRequest, available, get_provider_class
 
 log = logging.getLogger("aibridge.server")
@@ -144,6 +152,107 @@ async def build_app(provider_name: str, *, headless: bool = True) -> web.Applica
 
         return _cors(web.json_response(_completion_full(cid, req.model, "".join(acc))))
 
+    async def handle_anthropic_messages(request: web.Request) -> web.StreamResponse:
+        """Anthropic-native POST /v1/messages.
+
+        Translates the Anthropic request shape into our internal ChatRequest
+        (share the same provider.chat() pipeline as /v1/chat/completions),
+        then serializes the provider's incremental deltas back into Anthropic
+        SSE events for streaming clients or a single `Message` object for
+        non-streaming clients.
+        """
+        if not _auth_ok(request):
+            return _cors(web.json_response({
+                "type": "error",
+                "error": {"type": "authentication_error", "message": "invalid api key"},
+            }, status=401))
+        try:
+            body = await request.json()
+        except Exception:
+            return _cors(web.json_response({
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "invalid json"},
+            }, status=400))
+
+        try:
+            openai_body = anthropic_from_openai_body(body)
+        except ValueError as e:
+            return _cors(web.json_response({
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": str(e)},
+            }, status=400))
+
+        req = ChatRequest.from_openai(
+            openai_body,
+            session_id=(
+                request.headers.get("X-Session-Id")
+                or request.headers.get("X-Conversation-Id")
+                or None
+            ),
+        )
+        if not req.model:
+            return _cors(web.json_response({
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "model required"},
+            }, status=400))
+
+        mid = f"msg_{uuid.uuid4().hex[:24]}"
+
+        if req.stream:
+            resp = web.StreamResponse(
+                status=200,
+                headers={
+                    "Content-Type": "text/event-stream",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                },
+            )
+            _cors(resp)
+            await resp.prepare(request)
+            total_out = 0
+            try:
+                for line in anthropic_event_lines_start(mid, req.model):
+                    await resp.write(line.encode())
+                async for delta in provider.chat(req):
+                    if not delta:
+                        continue
+                    total_out += len(delta)
+                    for line in anthropic_event_lines_delta(delta):
+                        await resp.write(line.encode())
+                for line in anthropic_event_lines_stop(
+                    stop_reason=anthropic_stop_reason(None),
+                    output_tokens=total_out,
+                ):
+                    await resp.write(line.encode())
+            except Exception as e:
+                log.exception("anthropic stream error: %s", e)
+                err = {
+                    "type": "error",
+                    "error": {"type": "api_error", "message": str(e)},
+                }
+                await resp.write(
+                    f"event: error\ndata: {json.dumps(err)}\n\n".encode()
+                )
+            await resp.write_eof()
+            return resp
+
+        # non-streaming: collect full text then wrap as Anthropic Message
+        acc: list[str] = []
+        try:
+            async for delta in provider.chat(req):
+                acc.append(delta)
+        except Exception as e:
+            log.exception("anthropic chat error: %s", e)
+            return _cors(web.json_response({
+                "type": "error",
+                "error": {"type": "api_error", "message": str(e)},
+            }, status=500))
+
+        text = "".join(acc)
+        return _cors(web.json_response(
+            anthropic_final_body(mid, req.model, text)
+        ))
+
     async def handle_health(request: web.Request) -> web.Response:
         # Deep health probe upstream auth — only runs when explicitly asked
         # (`?deep=1`) so the default liveness check stays cheap and anonymous.
@@ -181,6 +290,7 @@ async def build_app(provider_name: str, *, headless: bool = True) -> web.Applica
     app.router.add_route("OPTIONS", "/{tail:.*}", _options)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/chat/completions", handle_chat)
+    app.router.add_post("/v1/messages", handle_anthropic_messages)
     app.router.add_get("/healthz", handle_health)
     app.router.add_get("/", handle_health)
 

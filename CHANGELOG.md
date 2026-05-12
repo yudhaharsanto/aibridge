@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Anthropic-native `POST /v1/messages`** — aibridge now speaks the
+  Anthropic Messages API in addition to OpenAI's chat/completions. Clients
+  like Claude Code, Cline, and anything else that targets Anthropic
+  natively can point straight at an aibridge daemon without a separate
+  adapter. Supports both streaming (full
+  `message_start→content_block_start→ping→content_block_delta…→content_block_stop→message_delta→message_stop`
+  sequence) and non-streaming responses. Accepts `x-api-key` as well as
+  `Authorization: Bearer <key>` headers. Validation errors come back in
+  Anthropic's `{type:"error", error:{type,message}}` envelope.
 - **Session health monitor** (`aibridge health`) — cron-friendly upstream
   auth probe. Hits each provider's cheapest signed-in endpoint
   (`/api/user/me` for Monica, `/rest/user/settings` for Perplexity) via the
