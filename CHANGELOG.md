@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Image uploads on Monica** — the provider now accepts images inside
+  OpenAI multi-modal `content` blocks (`{type:"image_url", image_url:{url}}`
+  with either a raw HTTPS URL or a `data:` URI) and Anthropic `image`
+  blocks (base64 or URL source). aibridge pre-uploads each image to
+  monica.im behind the scenes (presign → PUT → register → wait for index),
+  then sends the chat turn as a `file_with_text` payload referencing the
+  resulting CDN URL + `file_uid`. Claude Sonnet 4.6 and other vision
+  models can now describe attached images end-to-end through both
+  `POST /v1/chat/completions` and `POST /v1/messages`. Per-image cap is
+  20 MiB.
 - **Anthropic-native `POST /v1/messages`** — aibridge now speaks the
   Anthropic Messages API in addition to OpenAI's chat/completions. Clients
   like Claude Code, Cline, and anything else that targets Anthropic

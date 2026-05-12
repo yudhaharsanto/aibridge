@@ -26,33 +26,57 @@ import json
 from typing import Any, Iterable
 
 
-def _flatten_anthropic_content(content: Any) -> str:
-    """Anthropic `content` can be either a string or a list of blocks.
+def _flatten_anthropic_content(content: Any) -> str | list[dict[str, Any]]:
+    """Anthropic `content` → internal (OpenAI-shaped) content.
 
-    We only understand text blocks; anything else (tool_use, image, etc.)
-    gets dropped with a placeholder so the upstream model still receives
-    something coherent from the surrounding turns.
+    - String in → string out.
+    - List in → returns a string when only text blocks are present, or a
+      list of `{type: "text"|"image_url", ...}` dicts when images are mixed
+      in. Tool-use / tool-result blocks are dropped silently because the
+      underlying web providers can't honor them.
     """
     if content is None:
         return ""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: list[str] = []
+        text_parts: list[str] = []
+        images: list[dict[str, Any]] = []
         for block in content:
             if not isinstance(block, dict):
                 continue
             btype = block.get("type")
-            if btype == "text":
+            if btype in ("text", "input_text"):
                 t = block.get("text")
                 if isinstance(t, str):
-                    parts.append(t)
-            elif btype == "input_text":  # some clients send this variant
-                t = block.get("text")
-                if isinstance(t, str):
-                    parts.append(t)
-            # tool_use / tool_result / image: skipped (providers can't handle)
-        return "".join(parts)
+                    text_parts.append(t)
+            elif btype == "image":
+                src = block.get("source") or {}
+                src_type = src.get("type")
+                if src_type == "base64":
+                    media = src.get("media_type") or "image/png"
+                    data = src.get("data") or ""
+                    if isinstance(data, str) and data:
+                        images.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{media};base64,{data}"},
+                        })
+                elif src_type == "url":
+                    url = src.get("url")
+                    if isinstance(url, str) and url:
+                        images.append({
+                            "type": "image_url",
+                            "image_url": {"url": url},
+                        })
+            # tool_use / tool_result: skipped
+        if images:
+            out: list[dict[str, Any]] = []
+            joined = "".join(text_parts)
+            if joined:
+                out.append({"type": "text", "text": joined})
+            out.extend(images)
+            return out
+        return "".join(text_parts)
     # Unknown shape: best-effort stringify.
     return str(content)
 
@@ -106,10 +130,16 @@ def anthropic_from_openai_body(body: dict) -> dict:
             # Anthropic only has user/assistant at the `messages[].role` level.
             # Skip anything unknown rather than crash the request.
             continue
-        text = _flatten_anthropic_content(m.get("content"))
-        if not text:
-            continue
-        out_messages.append({"role": role, "content": text})
+        flattened = _flatten_anthropic_content(m.get("content"))
+        # Drop empties (str "" or []) but keep list-with-images even if the
+        # text portion was blank.
+        if isinstance(flattened, str):
+            if not flattened:
+                continue
+        elif isinstance(flattened, list):
+            if not flattened:
+                continue
+        out_messages.append({"role": role, "content": flattened})
 
     if not out_messages or not any(m["role"] == "user" for m in out_messages):
         raise ValueError("at least one user message with text content is required")

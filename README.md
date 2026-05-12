@@ -242,12 +242,50 @@ Notes:
 - `system` accepts both a plain string and Anthropic's block-shaped form
   (`[{"type":"text","text":"..."}]`).
 - `messages[].content` accepts a string or a list of `text` /
-  `input_text` blocks. Tool-use, tool-results, and images are ignored
+  `input_text` blocks. Tool-use and tool-result blocks are ignored
   because the underlying web providers don't expose those.
+- **Images work** on Monica via Anthropic `image` blocks:
+  ```json
+  {"type": "image", "source": {"type": "base64",
+   "media_type": "image/png", "data": "<base64>"}}
+  ```
+  URL sources (`{"type": "url", "url": "https://..."}`) also work.
+  aibridge pre-uploads the image to monica.im and attaches it to the
+  outgoing chat so vision-capable models (Claude Sonnet, GPT-4o,
+  Gemini, etc.) can see it.
 - `stream: true` returns the full Anthropic SSE event sequence
   (`message_start` → `content_block_start` → `ping` →
   `content_block_delta` … → `content_block_stop` → `message_delta` →
   `message_stop`).
+
+### Image uploads (OpenAI-shape clients)
+
+Any client that sends OpenAI-style multi-modal `content` also gets image
+support on Monica. Attach an image as a `data:` URI or a reachable HTTPS
+URL:
+
+```bash
+curl http://127.0.0.1:18788/v1/chat/completions \
+  -H "Authorization: Bearer $(aibridge key show monica | awk '/key:/{print $2}')" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "claude-sonnet-4-6",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What is in this image?"},
+        {"type": "image_url",
+         "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAAN..."}}
+      ]
+    }]
+  }'
+```
+
+Behind the scenes aibridge runs monica.im's 3-step upload flow (presign →
+PUT → register + index wait) using your logged-in browser session, then
+references the resulting CDN URL + `file_uid` in the chat payload. The
+per-image cap is 20 MiB. Perplexity does not currently support image
+uploads through aibridge.
 
 ## CLI reference
 
