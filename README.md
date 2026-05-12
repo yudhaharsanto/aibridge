@@ -51,30 +51,63 @@ A Perplexity Pro subscription is required to use the full model list.
 
 ## Install
 
-### From PyPI (recommended, once published)
+### One-liner (recommended)
+
+The installer bootstraps everything it needs — including Python itself — via
+[uv](https://docs.astral.sh/uv/), then installs aibridge as an isolated tool
+and runs `aibridge setup`. No pre-existing Python required.
+
+**macOS / Linux**
 
 ```bash
-pip install aibridge
-aibridge setup
+curl -fsSL https://raw.githubusercontent.com/yudhaharsanto/aibridge/main/install.sh | sh
 ```
 
-### From GitHub
+**Windows (PowerShell)**
 
-```bash
-pip install git+https://github.com/yudhaharsanto/aibridge.git
-aibridge setup
+```powershell
+iwr -useb https://raw.githubusercontent.com/yudhaharsanto/aibridge/main/install.ps1 | iex
 ```
 
-### With pipx (isolated)
+Environment overrides for the installer:
+
+| Variable               | Purpose                                     | Default |
+| ---------------------- | ------------------------------------------- | ------- |
+| `AIBRIDGE_REF`         | Git ref (branch/tag/sha) to install         | `main`  |
+| `AIBRIDGE_REPO`        | Override repo URL                           | official repo |
+| `AIBRIDGE_SKIP_SETUP`  | Set to `1` to skip the `aibridge setup` run | unset   |
+
+Example — install a specific tag without running setup yet:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/yudhaharsanto/aibridge/main/install.sh \
+  | AIBRIDGE_REF=v0.2.0 AIBRIDGE_SKIP_SETUP=1 sh
+```
+
+### Manual install
+
+If you already have Python 3.10+ and prefer to install by hand:
+
+```bash
+# via uv (recommended)
+uv tool install git+https://github.com/yudhaharsanto/aibridge.git
+
+# via pipx
 pipx install git+https://github.com/yudhaharsanto/aibridge.git
+
+# via pip (once published to PyPI)
+pip install aibridge
+```
+
+Then run the one-time setup:
+
+```bash
 aibridge setup
 ```
 
 Requirements:
 
-- Python 3.10 or later
+- Python 3.10 or later (auto-installed by the one-liner via uv)
 - One-time ~200 MB download of the Camoufox browser binary during `aibridge setup`
 
 ## Quick start
