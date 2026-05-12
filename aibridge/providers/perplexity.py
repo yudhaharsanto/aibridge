@@ -187,7 +187,12 @@ class PerplexityProvider:
         query = _last_user_message(req.messages)
         model_pref = MODEL_MAP.get(req.model, req.model)
 
+        # `frontend_uuid` is per-turn (the request id); re-generate each call.
+        # `frontend_context_uuid` threads turns together on Perplexity's
+        # side — derive it deterministically from the conversation identity
+        # so follow-ups land in the same chat instead of spawning new ones.
         fuuid = str(uuid.uuid4())
+        context_uuid = req.thread_uuid()
         payload = {
             "query_str": query,
             "params": {
@@ -201,7 +206,7 @@ class PerplexityProvider:
                 "model_preference": model_pref,
                 "is_related_query": False,
                 "is_sponsored": False,
-                "frontend_context_uuid": str(uuid.uuid4()),
+                "frontend_context_uuid": context_uuid,
                 "prompt_source": "user",
                 "query_source": "home",
                 "is_incognito": False,

@@ -45,7 +45,7 @@ def _flatten(content: Any) -> str:
     return str(content or "").strip()
 
 
-def _build_payload(model: str, messages: list[dict]) -> dict:
+def _build_payload(model: str, messages: list[dict], *, thread_seed: str | None = None) -> dict:
     chat_model = MODEL_MAP.get(model, model.replace("-", "_"))
 
     systems, turns = [], []
@@ -65,7 +65,11 @@ def _build_payload(model: str, messages: list[dict]) -> dict:
         "[system instructions]\n" + "\n\n".join(systems) + "\n\n" if systems else ""
     )
     first_user = next((t["text"] for t in turns if t["role"] == "user"), "")
-    conv_id = f"conv:{_stable_uuid(f'{model}|{systems}|{first_user}')}"
+    # Prefer the caller-supplied thread_seed (client X-Session-Id or hash of
+    # the conversation prefix) so follow-ups stay on the same monica thread.
+    # Fall back to the legacy seed for single-turn one-shots without context.
+    seed = thread_seed or f"{model}|{systems}|{first_user}"
+    conv_id = f"conv:{_stable_uuid(seed)}"
     welcome_id = f"msg:{_stable_uuid('welcome|' + conv_id)}"
 
     items = [{
@@ -189,7 +193,11 @@ class MonicaProvider:
     async def chat(self, req: ChatRequest) -> AsyncIterator[str]:
         if self._session is None:
             raise RuntimeError("provider not started")
-        payload = _build_payload(req.model, req.messages)
+        payload = _build_payload(
+            req.model,
+            req.messages,
+            thread_seed=req.thread_seed(),
+        )
 
         async for chunk in self._session.stream(
             API_URL,

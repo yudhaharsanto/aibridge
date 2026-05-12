@@ -5,6 +5,23 @@ All notable changes to aibridge are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Conversation continuity** — follow-up turns now land in the same thread
+  on the provider side instead of spawning a brand-new chat on every call.
+  - Perplexity: `frontend_context_uuid` is now derived from the conversation
+    identity (model + message prefix) instead of a random uuid per request.
+    Follow-ups in the same chat collapse to one Perplexity thread.
+  - Monica: `conversation_id` seed now accepts the same thread identity so
+    clients with stable session ids stay on one thread even when the first
+    user message is re-sent.
+  - New request header `X-Session-Id` (also accepts `X-Conversation-Id`) lets
+    clients explicitly pin a thread. When absent, aibridge falls back to a
+    hash of the conversation prefix so retries of the same chat collapse
+    onto the same thread.
+
 ## [0.2.0] — 2026-05-11
 
 ### ⚠️ Breaking changes

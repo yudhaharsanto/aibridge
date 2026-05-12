@@ -95,7 +95,14 @@ async def build_app(provider_name: str, *, headless: bool = True) -> web.Applica
         except Exception:
             return _cors(web.json_response({"error": "invalid json"}, status=400))
 
-        req = ChatRequest.from_openai(body)
+        req = ChatRequest.from_openai(
+            body,
+            session_id=(
+                request.headers.get("X-Session-Id")
+                or request.headers.get("X-Conversation-Id")
+                or None
+            ),
+        )
         if not req.model:
             return _cors(web.json_response({"error": "model required"}, status=400))
 
