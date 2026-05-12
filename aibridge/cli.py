@@ -215,6 +215,97 @@ def cmd_key_test(provider: str) -> int:
         return 1
 
 
+def cmd_health(provider: str | None, *, as_json: bool = False) -> int:
+    """Probe upstream auth for one provider or all.
+
+    Hits each running daemon's GET /healthz?deep=1 using the stored API key.
+    The daemon forwards the probe to the provider's upstream auth endpoint
+    (monica /api/user/me, perplexity /rest/user/settings) so we detect an
+    expired cookie without needing to send a real chat.
+
+    Exit code: 0 when every probed provider is ok, 1 if any fails. Designed
+    to be cron-friendly.
+    """
+    import json as _json
+    import urllib.request
+    import urllib.error
+    from . import tokens
+    from .daemon import _read_pid
+
+    targets: list[str]
+    if provider in (None, "all"):
+        targets = list(PROVIDERS.keys())
+    else:
+        if provider not in PROVIDERS:
+            print(f"error: unknown provider '{provider}'.", file=sys.stderr)
+            return 2
+        targets = [provider]
+
+    results: list[dict] = []
+    any_fail = False
+
+    for name in targets:
+        entry: dict = {
+            "provider": name, "ok": False, "status": None,
+            "detail": "", "hint": "",
+        }
+        pid = _read_pid(name)
+        if not pid:
+            entry.update(detail="daemon not running", hint=f"aibridge start {name}")
+            any_fail = True
+            results.append(entry)
+            continue
+        port = PROVIDERS[name].default_port
+        key = tokens.get(name)
+        url = f"http://127.0.0.1:{port}/healthz?deep=1"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body = resp.read().decode("utf-8", "replace")
+            data = _json.loads(body) if body else {}
+            entry.update(
+                ok=bool(data.get("ok")),
+                status=data.get("status"),
+                detail=data.get("detail") or "",
+                hint=data.get("hint") or "",
+            )
+        except urllib.error.HTTPError as e:
+            # 503 is our "upstream auth broken" signal; still readable body
+            try:
+                body = e.read().decode("utf-8", "replace")
+                data = _json.loads(body)
+                entry.update(
+                    ok=bool(data.get("ok")),
+                    status=data.get("status"),
+                    detail=data.get("detail") or "",
+                    hint=data.get("hint") or "",
+                )
+            except Exception:  # noqa: BLE001
+                entry.update(detail=f"HTTP {e.code} {e.reason}",
+                             hint=f"aibridge restart {name}")
+        except urllib.error.URLError as e:
+            entry.update(detail=f"connection failed: {e.reason}",
+                         hint=f"aibridge restart {name}")
+        except Exception as e:  # noqa: BLE001
+            entry.update(detail=f"probe error: {e}",
+                         hint=f"aibridge restart {name}")
+        if not entry["ok"]:
+            any_fail = True
+        results.append(entry)
+
+    if as_json:
+        print(_json.dumps({"ok": not any_fail, "results": results}, indent=2))
+    else:
+        for r in results:
+            mark = "\u2713" if r["ok"] else "\u2717"
+            head = f"[{mark}] {r['provider']:<12}"
+            status = f" ({r['status']})" if r.get("status") else ""
+            print(f"{head}{status} {r['detail']}")
+            if not r["ok"] and r.get("hint"):
+                print(f"    hint: {r['hint']}")
+    return 1 if any_fail else 0
+
+
 def cmd_logout(provider: str) -> int:
     if provider not in PROVIDERS:
         print(f"error: unknown provider '{provider}'.", file=sys.stderr)
@@ -371,6 +462,20 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("test", help="smoke-test provider end-to-end (foreground)")
     sp.add_argument("provider", choices=sorted(PROVIDERS))
 
+    sp = sub.add_parser(
+        "health",
+        help="probe upstream provider auth (cron-friendly; exit 1 on failure)",
+    )
+    sp.add_argument(
+        "provider", nargs="?", default="all",
+        choices=["all", *sorted(PROVIDERS)],
+        help="provider to probe (default: all)",
+    )
+    sp.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="emit machine-readable JSON instead of text",
+    )
+
     args = p.parse_args(argv)
     _setup_log(args.verbose)
 
@@ -483,6 +588,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "test":
         return asyncio.run(cmd_test(args.provider))
+
+    if cmd == "health":
+        target = None if args.provider == "all" else args.provider
+        return cmd_health(target, as_json=args.as_json)
 
     return 2
 

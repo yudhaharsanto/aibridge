@@ -233,6 +233,9 @@ aibridge logs <provider> [-f] [-n N] view / tail the daemon log
 aibridge serve <provider>            run in the foreground (useful for debugging)
 
 aibridge test <provider>             send a ping message end-to-end
+aibridge health [provider|all] [--json]
+                                    probe upstream provider auth (cron-friendly;
+                                    exit 1 if any provider's session is expired)
 
 aibridge key show [provider|all]     show API key(s) for the local HTTP server
 aibridge key set <provider> <key>    set a custom API key
@@ -314,10 +317,32 @@ aibridge register-9router perplexity
 
 ```bash
 aibridge doctor         # check environment + each provider, suggests fixes
+aibridge health         # probe upstream auth (monica / perplexity cookies)
 aibridge status all     # daemon status only
 aibridge logs monica    # recent log
 aibridge logs monica -f # follow log (like tail -f)
 ```
+
+### Session health monitoring
+
+`aibridge health` sends a cheap authenticated request to each provider's
+upstream (`/api/user/me` for Monica, `/rest/user/settings` for Perplexity)
+and reports whether the saved browser session is still valid. It exits with
+code **0** when every provider is happy and **1** when anything needs
+attention, so it drops straight into cron:
+
+```cron
+# every 6 hours, warn via `notify-send` if any provider session is expired
+0 */6 * * *  aibridge health || notify-send "aibridge" "Session expired — run: aibridge login"
+```
+
+On macOS you can wire it to the system notifier:
+
+```bash
+aibridge health || osascript -e 'display notification "aibridge session expired" with title "aibridge"'
+```
+
+Use `aibridge health --json` when piping into a monitor / dashboard.
 
 Common issues:
 

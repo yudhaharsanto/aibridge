@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator
 
 from ..browser import BrowserSession
 from ..config import PROVIDERS, session_path
-from . import ChatRequest, register
+from . import ChatRequest, HealthReport, register
 
 log = logging.getLogger("aibridge.monica")
 
@@ -189,6 +189,54 @@ class MonicaProvider:
         if self._session is not None:
             await self._session.close()
             self._session = None
+
+    async def health_check(self) -> HealthReport:
+        """Probe monica auth with a cheap GET /api/user/me.
+
+        Monica wraps responses in {code, msg, ...}. A valid session returns
+        code=0. Expired / missing cookies surface as HTTP 401/403 or a
+        non-zero code.
+        """
+        if self._session is None:
+            return HealthReport(self.name, False, None, "not started", "aibridge start monica")
+        url = "https://api.monica.im/api/user/me"
+        try:
+            status, _hdrs, text = await self._session.fetch(
+                url,
+                method="GET",
+                headers={"Accept": "application/json"},
+                timeout_ms=10_000,
+            )
+        except Exception as e:  # noqa: BLE001
+            return HealthReport(
+                self.name, False, None, f"probe failed: {e}",
+                "aibridge restart monica",
+            )
+        if status in (401, 403):
+            return HealthReport(
+                self.name, False, status,
+                "session expired (unauthenticated)",
+                "aibridge login monica",
+            )
+        if status >= 500:
+            return HealthReport(
+                self.name, False, status,
+                f"upstream {status}", "retry later",
+            )
+        try:
+            data = json.loads(text) if text else {}
+        except json.JSONDecodeError:
+            data = {}
+        code = data.get("code")
+        if status == 200 and code == 0:
+            user = data.get("user") or {}
+            name = user.get("name") or user.get("email") or "ok"
+            return HealthReport(self.name, True, status, f"signed in as {name}")
+        return HealthReport(
+            self.name, False, status,
+            f"unexpected response: code={code!r} msg={data.get('msg')!r}",
+            "aibridge login monica",
+        )
 
     async def chat(self, req: ChatRequest) -> AsyncIterator[str]:
         if self._session is None:

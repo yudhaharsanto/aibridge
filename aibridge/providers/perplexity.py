@@ -18,7 +18,7 @@ from typing import Any, AsyncIterator
 
 from ..browser import BrowserSession
 from ..config import PROVIDERS, session_path
-from . import ChatRequest, register
+from . import ChatRequest, HealthReport, register
 
 log = logging.getLogger("aibridge.perplexity")
 
@@ -184,6 +184,55 @@ class PerplexityProvider:
         if self._session is not None:
             await self._session.close()
             self._session = None
+
+    async def health_check(self) -> HealthReport:
+        """Probe perplexity auth with a cheap GET /rest/user/settings.
+
+        Anonymous visitors get a 401/403 on this endpoint, signed-in users
+        get a 200 with their subscription/upload limits.
+        """
+        if self._session is None:
+            return HealthReport(self.name, False, None, "not started", "aibridge start perplexity")
+        url = "https://www.perplexity.ai/rest/user/settings"
+        try:
+            status, _hdrs, text = await self._session.fetch(
+                url,
+                method="GET",
+                headers={"Accept": "application/json"},
+                timeout_ms=10_000,
+            )
+        except Exception as e:  # noqa: BLE001
+            return HealthReport(
+                self.name, False, None, f"probe failed: {e}",
+                "aibridge restart perplexity",
+            )
+        if status in (401, 403):
+            return HealthReport(
+                self.name, False, status,
+                "session expired (unauthenticated)",
+                "aibridge login perplexity",
+            )
+        if status >= 500:
+            return HealthReport(
+                self.name, False, status,
+                f"upstream {status}", "retry later",
+            )
+        if status == 200:
+            # Endpoint only returns an object when the user is signed in;
+            # anonymous clients 302/404 before reaching here. Try to include
+            # something useful in detail.
+            try:
+                data = json.loads(text) if text else {}
+                limit = data.get("upload_limit")
+                detail = f"authenticated (upload_limit={limit})" if limit is not None else "authenticated"
+            except json.JSONDecodeError:
+                detail = "authenticated"
+            return HealthReport(self.name, True, status, detail)
+        return HealthReport(
+            self.name, False, status,
+            f"unexpected HTTP {status}",
+            "aibridge login perplexity",
+        )
 
     async def chat(self, req: ChatRequest) -> AsyncIterator[str]:
         if self._session is None:

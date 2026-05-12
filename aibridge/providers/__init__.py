@@ -89,6 +89,35 @@ class Provider(Protocol):
         """Yield text deltas (incremental response)."""
         ...
 
+    async def health_check(self) -> "HealthReport":
+        """Probe upstream auth with a cheap authenticated request.
+
+        Returns a HealthReport describing whether the provider session is
+        still valid. Implementations should swallow network errors and
+        report them as HealthReport(ok=False, ...) instead of raising so
+        the caller can aggregate results across providers.
+        """
+        ...
+
+
+@dataclass
+class HealthReport:
+    """Result of a provider upstream auth probe."""
+    provider: str
+    ok: bool
+    status: int | None = None   # HTTP status observed, when applicable
+    detail: str = ""            # short human-readable reason
+    hint: str = ""              # suggested remediation when ok=False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "ok": self.ok,
+            "status": self.status,
+            "detail": self.detail,
+            "hint": self.hint,
+        }
+
 
 _REGISTRY: dict[str, type] = {}
 

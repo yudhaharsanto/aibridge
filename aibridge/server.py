@@ -144,7 +144,33 @@ async def build_app(provider_name: str, *, headless: bool = True) -> web.Applica
 
         return _cors(web.json_response(_completion_full(cid, req.model, "".join(acc))))
 
-    async def handle_health(_request: web.Request) -> web.Response:
+    async def handle_health(request: web.Request) -> web.Response:
+        # Deep health probe upstream auth — only runs when explicitly asked
+        # (`?deep=1`) so the default liveness check stays cheap and anonymous.
+        if request.query.get("deep") in ("1", "true", "yes"):
+            if not _auth_ok(request):
+                return _cors(web.json_response({"error": "invalid api key"}, status=401))
+            try:
+                report = await provider.health_check()
+            except Exception as e:  # noqa: BLE001
+                log.exception("health_check error: %s", e)
+                return _cors(web.json_response({
+                    "ok": False,
+                    "provider": provider.name,
+                    "detail": f"probe crashed: {e}",
+                }, status=500))
+            payload = {
+                "ok": report.ok,
+                "provider": report.provider,
+                "status": report.status,
+                "detail": report.detail,
+                "hint": report.hint,
+                "models": provider.models,
+            }
+            # Service itself is still up, but return 503 when upstream auth
+            # failed so orchestrators / cron jobs can alert on a simple curl.
+            return _cors(web.json_response(payload, status=200 if report.ok else 503))
+
         return _cors(web.json_response({
             "ok": True,
             "provider": provider.name,

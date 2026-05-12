@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Session health monitor** (`aibridge health`) — cron-friendly upstream
+  auth probe. Hits each provider's cheapest signed-in endpoint
+  (`/api/user/me` for Monica, `/rest/user/settings` for Perplexity) via the
+  running daemon, reports whether the saved browser session is still valid,
+  and exits non-zero when any provider needs `aibridge login`. `--json`
+  flag for machine-readable output.
+- **`GET /healthz?deep=1`** — deep health variant on the provider daemon.
+  Returns 200 + `{ok:true,...}` for a healthy upstream, 503 + a `hint`
+  field when the cookie is expired or the session is otherwise broken.
+  Requires the provider API key.
+- **`Provider.health_check()`** hook + new `HealthReport` dataclass for
+  future providers to implement.
 - **Conversation continuity** — follow-up turns now land in the same thread
   on the provider side instead of spawning a brand-new chat on every call.
   - Perplexity: captures `backend_uuid` and `context_uuid` from each response
